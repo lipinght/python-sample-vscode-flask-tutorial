@@ -6,31 +6,85 @@
 trigger:
 - master
 
-pool:
-  vmImage: ubuntu-latest
-strategy:
-  matrix:
-    Python27:
-      python.version: '2.7'
-    Python35:
-      python.version: '3.5'
-    Python36:
-      python.version: '3.6'
-    Python37:
-      python.version: '3.7'
-
+# check python version
 steps:
 - task: UsePythonVersion@0
   inputs:
-    versionSpec: '$(python.version)'
-  displayName: 'Use Python $(python.version)'
+    versionSpec: '3.6'
 
-- script: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-  displayName: 'Install dependencies'
+# Run Python Script
+- script: python src/example.py
 
+# Run inline Python Script
+- task: PythonScript@0
+  inputs:
+    scriptSource: 'inline'
+    script: |
+      print('Hello world 1')
+      print('Hello world 2')
+
+# parameterize script execution, use the PythonScript task with arguments values to pass arguments into the executing process. 
+# You can use sys.argv or the more sophisticated argparse library to parse the arguments.
+- task: PythonScript@0
+  inputs:
+    scriptSource: inline
+    script: |
+      import sys
+      print ('Executing script file is:', str(sys.argv[0]))
+      print ('The arguments are:', str(sys.argv))
+      import argparse
+      parser = argparse.ArgumentParser()
+      parser.add_argument("--world", help="Provide the name of the world to greet.")
+      args = parser.parse_args()
+      print ('Hello ', args.world)
+    arguments: --world Venus
+
+# install dependencies
+- script: python -m pip install --upgrade pip setuptools wheel
+  displayName: 'Install tools'
+
+# install requirements
+- script: pip install -r requirements.txt
+  displayName: 'Install requirements'
+
+# Run Test
+# install flake 8
 - script: |
-    pip install pytest pytest-azurepipelines
-    pytest
-  displayName: 'pytest'
+    python -m pip install flake8
+    flake8 .
+  displayName: 'Run lint tests'
+
+#Test with pytest and collect coverage metrics with pytest-cov
+#Use this YAML to install pytest and pytest-cov, run tests, 
+#output test results in JUnit format, and output code coverage results in Cobertura XML format:
+- script: |
+    pip install pytest
+    pip install pytest-cov
+    pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=. --cov-report=xml --cov-report=html
+  displayName: 'Test with pytest'
+     
+#publish test results
+- task: PublishTestResults@2
+  condition: succeededOrFailed()
+  inputs:
+    testResultsFiles: '**/test-*.xml'
+    testRunTitle: 'Publish test results for Python $(python.version)'
+
+#publish code coverage results
+- task: PublishCodeCoverageResults@1
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+    reportDirectory: '$(System.DefaultWorkingDirectory)/**/htmlcov'
+
+#package and deliver code
+#To authenticate with twine, 
+#use the Twine Authenticate task to store authentication credentials in the PYPIRC_PATH environment variable.
+- task: TwineAuthenticate@0
+  inputs:
+    artifactFeed: '<Azure Artifacts feed name>'
+    pythonUploadServiceConnection: '<twine service connection from external organization>'
+
+#Then, add a custom script that uses twine to publish your packages.
+- script: |
+   twine upload -r "<feed or service connection name>" --config-file $(PYPIRC_PATH) <package path/files>
